@@ -24,3 +24,15 @@ def test_scan_falls_back_to_file_modified_time(tmp_path):
 
     assert result.photos[0].captured_at == datetime(2023, 2, 3, 4, 5, 6)
     assert result.photos[0].date_source == "Modified time"
+
+
+def test_scan_skips_damaged_images(tmp_path):
+    make_jpeg(tmp_path / "good.jpg", captured_at=datetime(2025, 1, 2, 3, 4, 5))
+    (tmp_path / "broken.jpg").write_bytes(b"this is not a jpeg")
+
+    result = scan_directory(tmp_path)
+
+    assert [photo.source.name for photo in result.photos] == ["good.jpg"]
+    assert [(item.path.name, item.reason) for item in result.skipped] == [
+        ("broken.jpg", "Unreadable image")
+    ]
