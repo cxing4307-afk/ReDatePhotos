@@ -29,6 +29,12 @@ class SkippedPhoto:
 
 
 @dataclass(frozen=True)
+class UndoEntry:
+    original: str
+    renamed: str
+
+
+@dataclass(frozen=True)
 class Rename:
     source: Path
     destination: Path
@@ -54,42 +60,35 @@ def scan_directory(directory: str | Path) -> ScanResult:
 
 def plan_renames(scan: ScanResult) -> tuple[Rename, ...]:
     reserved: set[Path] = set()
+    sources = {photo.source for photo in scan.photos}
+    occupied = set(scan.photos[0].source.parent.iterdir()) - sources if scan.photos else set()
     plan: list[Rename] = []
     for photo in sorted(scan.photos, key=lambda item: (item.captured_at, item.source.name.casefold())):
         stem = photo.captured_at.strftime("%Y-%m-%d_%H-%M-%S")
         destination = photo.source.with_name(f"{stem}.jpg")
         suffix = 2
-        while destination in reserved:
+        while destination in reserved or destination in occupied:
             destination = photo.source.with_name(f"{stem}_{suffix}.jpg")
             suffix += 1
         reserved.add(destination)
-        plan.append(Rename(photo.source, destination, photo.captured_at, photo.date_source))
+        if destination != photo.source:
+            plan.append(Rename(photo.source, destination, photo.captured_at, photo.date_source))
     return tuple(plan)
 
 
 def apply_plan(plan: tuple[Rename, ...]) -> int:
     if not plan:
         return 0
-    sources = {item.source for item in plan}
-    blocked = [item.destination for item in plan if item.destination.exists() and item.destination not in sources]
-    if blocked:
-        raise FileExistsError(f"Destination already exists: {blocked[0].name}")
-
-    staged: list[tuple[Rename, Path]] = []
-    for index, item in enumerate(plan):
-        temporary = item.source.with_name(f".redatephotos-{index}.tmp")
-        if temporary.exists():
-            raise FileExistsError(f"Temporary file already exists: {temporary.name}")
-        item.source.rename(temporary)
-        staged.append((item, temporary))
-
-    for item, temporary in staged:
-        temporary.rename(item.destination)
+    _move_in_two_phases(
+        tuple((item.source, item.destination) for item in plan),
+        temporary_prefix=".redatephotos-",
+    )
 
     manifest = plan[0].source.parent / MANIFEST_NAME
+    entries = [UndoEntry(item.source.name, item.destination.name) for item in plan]
     manifest.write_text(
         json.dumps(
-            [{"original": item.source.name, "renamed": item.destination.name} for item in plan],
+            [entry.__dict__ for entry in entries],
             indent=2,
         )
         + "\n",
@@ -101,19 +100,50 @@ def apply_plan(plan: tuple[Rename, ...]) -> int:
 def undo_last(directory: str | Path) -> int:
     folder = Path(directory).expanduser().resolve()
     manifest = folder / MANIFEST_NAME
-    entries = json.loads(manifest.read_text(encoding="utf-8"))
-
-    staged: list[tuple[dict[str, str], Path]] = []
-    for index, entry in enumerate(entries):
-        source = folder / entry["renamed"]
-        temporary = folder / f".redatephotos-undo-{index}.tmp"
-        source.rename(temporary)
-        staged.append((entry, temporary))
-
-    for entry, temporary in staged:
-        temporary.rename(folder / entry["original"])
+    entries = tuple(UndoEntry(**item) for item in json.loads(manifest.read_text(encoding="utf-8")))
+    _move_in_two_phases(
+        tuple((folder / entry.renamed, folder / entry.original) for entry in entries),
+        temporary_prefix=".redatephotos-undo-",
+    )
     manifest.unlink()
     return len(entries)
+
+
+def _move_in_two_phases(moves: tuple[tuple[Path, Path], ...], *, temporary_prefix: str) -> None:
+    sources = {source for source, _ in moves}
+    blocked = [destination for _, destination in moves if destination.exists() and destination not in sources]
+    if blocked:
+        raise FileExistsError(f"Destination already exists: {blocked[0].name}")
+
+    staged = [
+        (source, destination, source.with_name(f"{temporary_prefix}{index}.tmp"))
+        for index, (source, destination) in enumerate(moves)
+    ]
+    blocked_temporary = [temporary for _, _, temporary in staged if temporary.exists()]
+    if blocked_temporary:
+        raise FileExistsError(f"Temporary file already exists: {blocked_temporary[0].name}")
+
+    moved_to_temporary: list[tuple[Path, Path]] = []
+    try:
+        for source, _, temporary in staged:
+            source.rename(temporary)
+            moved_to_temporary.append((source, temporary))
+    except OSError:
+        for source, temporary in reversed(moved_to_temporary):
+            temporary.rename(source)
+        raise
+
+    moved_to_destination: list[tuple[Path, Path]] = []
+    try:
+        for _, destination, temporary in staged:
+            temporary.rename(destination)
+            moved_to_destination.append((temporary, destination))
+    except OSError:
+        for temporary, destination in reversed(moved_to_destination):
+            destination.rename(temporary)
+        for source, temporary in reversed(moved_to_temporary):
+            temporary.rename(source)
+        raise
 
 
 def _read_photo(path: Path) -> Photo:
@@ -122,6 +152,9 @@ def _read_photo(path: Path) -> Photo:
         exif = image.getexif()
         for tag in (36867, 36868, 306):
             if value := exif.get(tag):
-                return Photo(path, datetime.strptime(str(value), "%Y:%m:%d %H:%M:%S"), "EXIF")
+                try:
+                    return Photo(path, datetime.strptime(str(value), "%Y:%m:%d %H:%M:%S"), "EXIF")
+                except ValueError:
+                    continue
 
     return Photo(path, datetime.fromtimestamp(path.stat().st_mtime), "Modified time")

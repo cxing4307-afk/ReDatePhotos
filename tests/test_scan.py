@@ -1,5 +1,7 @@
 from datetime import datetime
 
+from PIL import Image
+
 from conftest import make_jpeg, set_mtime
 from redatephotos.core import scan_directory
 
@@ -36,3 +38,16 @@ def test_scan_skips_damaged_images(tmp_path):
     assert [(item.path.name, item.reason) for item in result.skipped] == [
         ("broken.jpg", "Unreadable image")
     ]
+
+
+def test_scan_tries_later_dates_when_preferred_exif_is_malformed(tmp_path):
+    photo = tmp_path / "odd-camera.jpg"
+    exif = Image.Exif()
+    exif[36867] = "not a date"
+    exif[36868] = "2023:04:05 06:07:08"
+    Image.new("RGB", (10, 10)).save(photo, "JPEG", exif=exif)
+
+    result = scan_directory(tmp_path)
+
+    assert result.photos[0].captured_at == datetime(2023, 4, 5, 6, 7, 8)
+    assert result.photos[0].date_source == "EXIF"

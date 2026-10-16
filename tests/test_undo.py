@@ -1,5 +1,7 @@
 from datetime import datetime
 
+import pytest
+
 from conftest import make_jpeg
 from redatephotos.core import apply_plan, plan_renames, scan_directory, undo_last
 
@@ -18,3 +20,16 @@ def test_undo_restores_original_names(tmp_path):
     assert undo_last(tmp_path) == 2
     assert sorted(path.name for path in tmp_path.glob("*.jpg")) == ["holiday-a.jpg", "holiday-b.jpg"]
     assert not (tmp_path / ".redatephotos-undo.json").exists()
+
+
+def test_apply_checks_every_temporary_name_before_moving_files(tmp_path):
+    make_jpeg(tmp_path / "first.jpg", captured_at=datetime(2021, 5, 4, 3, 2, 1))
+    make_jpeg(tmp_path / "second.jpg", captured_at=datetime(2021, 5, 4, 3, 2, 2))
+    (tmp_path / ".redatephotos-1.tmp").write_text("occupied", encoding="utf-8")
+    plan = plan_renames(scan_directory(tmp_path))
+
+    with pytest.raises(FileExistsError):
+        apply_plan(plan)
+
+    assert (tmp_path / "first.jpg").exists()
+    assert (tmp_path / "second.jpg").exists()

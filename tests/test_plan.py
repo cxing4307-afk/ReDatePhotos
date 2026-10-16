@@ -27,3 +27,18 @@ def test_plan_numbers_photos_with_the_same_destination(tmp_path):
         "2024-07-08_09-10-11.jpg",
         "2024-07-08_09-10-11_2.jpg",
     ]
+
+
+def test_plan_avoids_an_existing_destination(tmp_path):
+    make_jpeg(tmp_path / "camera.jpg", captured_at=datetime(2024, 7, 8, 9, 10, 11))
+    (tmp_path / "2024-07-08_09-10-11.jpg").write_bytes(b"occupied")
+
+    plan = plan_renames(scan_directory(tmp_path))
+
+    assert [item.destination.name for item in plan] == ["2024-07-08_09-10-11_2.jpg"]
+
+
+def test_plan_omits_a_photo_that_already_has_the_right_name(tmp_path):
+    make_jpeg(tmp_path / "2024-07-08_09-10-11.jpg", captured_at=datetime(2024, 7, 8, 9, 10, 11))
+
+    assert plan_renames(scan_directory(tmp_path)) == ()

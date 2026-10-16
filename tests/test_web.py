@@ -26,6 +26,10 @@ def test_web_workflow_scans_applies_and_undoes(tmp_path):
     assert applied.get_json() == {"renamed": 1}
     assert (tmp_path / "2024-03-02_01-02-03.jpg").exists()
 
+    after_apply = client.post("/api/scan", json={"directory": str(tmp_path)}).get_json()
+    assert after_apply["items"] == []
+    assert after_apply["can_undo"] is True
+
     undone = client.post("/api/undo", json={"directory": str(tmp_path)})
     assert undone.get_json() == {"restored": 1}
     assert (tmp_path / "from-camera.jpg").exists()
