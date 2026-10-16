@@ -1,8 +1,12 @@
 from dataclasses import dataclass
 from datetime import datetime
+import json
 from pathlib import Path
 
 from PIL import Image
+
+
+MANIFEST_NAME = ".redatephotos-undo.json"
 
 
 @dataclass(frozen=True)
@@ -44,6 +48,55 @@ def plan_renames(scan: ScanResult) -> tuple[Rename, ...]:
         reserved.add(destination)
         plan.append(Rename(photo.source, destination, photo.captured_at, photo.date_source))
     return tuple(plan)
+
+
+def apply_plan(plan: tuple[Rename, ...]) -> int:
+    if not plan:
+        return 0
+    sources = {item.source for item in plan}
+    blocked = [item.destination for item in plan if item.destination.exists() and item.destination not in sources]
+    if blocked:
+        raise FileExistsError(f"Destination already exists: {blocked[0].name}")
+
+    staged: list[tuple[Rename, Path]] = []
+    for index, item in enumerate(plan):
+        temporary = item.source.with_name(f".redatephotos-{index}.tmp")
+        if temporary.exists():
+            raise FileExistsError(f"Temporary file already exists: {temporary.name}")
+        item.source.rename(temporary)
+        staged.append((item, temporary))
+
+    for item, temporary in staged:
+        temporary.rename(item.destination)
+
+    manifest = plan[0].source.parent / MANIFEST_NAME
+    manifest.write_text(
+        json.dumps(
+            [{"original": item.source.name, "renamed": item.destination.name} for item in plan],
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return len(plan)
+
+
+def undo_last(directory: str | Path) -> int:
+    folder = Path(directory).expanduser().resolve()
+    manifest = folder / MANIFEST_NAME
+    entries = json.loads(manifest.read_text(encoding="utf-8"))
+
+    staged: list[tuple[dict[str, str], Path]] = []
+    for index, entry in enumerate(entries):
+        source = folder / entry["renamed"]
+        temporary = folder / f".redatephotos-undo-{index}.tmp"
+        source.rename(temporary)
+        staged.append((entry, temporary))
+
+    for entry, temporary in staged:
+        temporary.rename(folder / entry["original"])
+    manifest.unlink()
+    return len(entries)
 
 
 def _read_photo(path: Path) -> Photo:
