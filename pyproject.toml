@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "redatephotos"
+version = "0.1.0"
+description = "Preview, rename, and undo a folder of JPEG photos by capture time"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "cxing4307-afk" }]
+dependencies = [
+  "Flask>=3.0,<4",
+  "Pillow>=10,<13",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8,<10"]
+
+[project.scripts]
+redatephotos = "redatephotos.web:main"
+
+[tool.setuptools.packages.find]
+include = ["redatephotos*"]
+
+[tool.setuptools.package-data]
+redatephotos = ["templates/*.html"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
