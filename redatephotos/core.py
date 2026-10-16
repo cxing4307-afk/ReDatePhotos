@@ -19,6 +19,13 @@ class Photo:
 @dataclass(frozen=True)
 class ScanResult:
     photos: tuple[Photo, ...]
+    skipped: tuple["SkippedPhoto", ...] = ()
+
+
+@dataclass(frozen=True)
+class SkippedPhoto:
+    path: Path
+    reason: str
 
 
 @dataclass(frozen=True)
@@ -31,8 +38,18 @@ class Rename:
 
 def scan_directory(directory: str | Path) -> ScanResult:
     folder = Path(directory).expanduser().resolve()
-    photos = tuple(_read_photo(path) for path in folder.iterdir() if path.suffix.lower() in {".jpg", ".jpeg"})
-    return ScanResult(photos=photos)
+    photos: list[Photo] = []
+    skipped: list[SkippedPhoto] = []
+    candidates = sorted(
+        (path for path in folder.iterdir() if not path.name.startswith(".") and path.suffix.lower() in {".jpg", ".jpeg"}),
+        key=lambda path: path.name.casefold(),
+    )
+    for path in candidates:
+        try:
+            photos.append(_read_photo(path))
+        except (OSError, ValueError):
+            skipped.append(SkippedPhoto(path, "Unreadable image"))
+    return ScanResult(photos=tuple(photos), skipped=tuple(skipped))
 
 
 def plan_renames(scan: ScanResult) -> tuple[Rename, ...]:
@@ -101,6 +118,7 @@ def undo_last(directory: str | Path) -> int:
 
 def _read_photo(path: Path) -> Photo:
     with Image.open(path) as image:
+        image.load()
         exif = image.getexif()
         for tag in (36867, 36868, 306):
             if value := exif.get(tag):
